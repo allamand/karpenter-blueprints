@@ -45,9 +45,11 @@ data "aws_availability_zones" "available" {
   }
 }
 
+data "aws_partition" "current" {}
+
 locals {
   name            = "karpenter-blueprints"
-  cluster_version = "1.30"
+  cluster_version = "1.31"
   region          = var.region
   node_group_name = "managed-ondemand"
 
@@ -56,6 +58,10 @@ locals {
   vpc_cidr = "10.0.0.0/16"
   # NOTE: You might need to change this less number of AZs depending on the region you're deploying to
   azs = slice(data.aws_availability_zones.available.names, 0, 3)
+
+  context = {
+    aws_partition_id = data.aws_partition.current.partition
+  }
 
   tags = {
     blueprint = local.name
@@ -127,7 +133,7 @@ module "eks" {
 
 module "eks_blueprints_addons" {
   source  = "aws-ia/eks-blueprints-addons/aws"
-  version = "1.16.3"
+  version = "1.17.0"
 
   cluster_name      = module.eks.cluster_name
   cluster_endpoint  = module.eks.cluster_endpoint
@@ -158,17 +164,68 @@ module "eks_blueprints_addons" {
   enable_karpenter = true
 
   karpenter = {
-    chart_version       = "1.0.1"
+    chart_version       = "1.0.6"
     repository_username = data.aws_ecrpublic_authorization_token.token.user_name
     repository_password = data.aws_ecrpublic_authorization_token.token.password
+    repository                                = "oci://public.ecr.aws/karpenter"
+    namespace = "kube-system"
+    #create_role            = true
+    #role_name              = "${module.eks.cluster_name}-karpenter-irsa"
+    role_name_use_prefix   = false
   }
+
   karpenter_enable_spot_termination          = true
   karpenter_enable_instance_profile_creation = true
   karpenter_node = {
     iam_role_use_name_prefix = false
+    #create_iam_role = false
+    #iam_role_arn = aws_iam_role.karpenter_node.arn
   }
 
+  depends_on = [
+    aws_eks_access_entry.karpenter_node_access_entry
+  ]
+
   tags = local.tags
+}
+
+resource "aws_iam_role" "karpenter_node" {
+  name = "${module.eks.cluster_name}-karpenter-node"
+ 
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Sid    = ""
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      },
+    ]
+  })
+ 
+  managed_policy_arns = [
+    "arn:${local.context.aws_partition_id}:iam::aws:policy/AmazonEKSWorkerNodePolicy",
+    "arn:${local.context.aws_partition_id}:iam::aws:policy/AmazonEKS_CNI_Policy",
+    "arn:${local.context.aws_partition_id}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+    "arn:${local.context.aws_partition_id}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  ]
+}
+
+resource "aws_eks_access_entry" "karpenter_node_access_entry" {
+  cluster_name      = module.eks.cluster_name
+  principal_arn     = aws_iam_role.karpenter_node.arn
+  # Required for updates to work
+  # But prevents creation
+  # kubernetes_groups = ["system:nodes"]
+  type              = "EC2_LINUX"
+ 
+  # Fixes the above mentionned update issue
+  lifecycle {
+    ignore_changes = [ kubernetes_groups ]
+  }
 }
 
 module "ebs_csi_driver_irsa" {
