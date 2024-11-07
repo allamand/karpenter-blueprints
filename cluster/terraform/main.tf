@@ -124,6 +124,7 @@ module "eks" {
         intent = "control-apps"
       }
     }
+
   }
 
   tags = merge(local.tags, {
@@ -149,6 +150,9 @@ module "eks_blueprints_addons" {
     aws-ebs-csi-driver = {
       service_account_role_arn = module.ebs_csi_driver_irsa.iam_role_arn
     }
+    eks-pod-identity-agent = {
+      most_recent = true
+    }
   }
 
   enable_aws_for_fluentbit = true
@@ -164,13 +168,13 @@ module "eks_blueprints_addons" {
   enable_karpenter = true
 
   karpenter = {
-    chart_version       = "1.0.6"
+    chart_version       = "1.0.7"
     repository_username = data.aws_ecrpublic_authorization_token.token.user_name
     repository_password = data.aws_ecrpublic_authorization_token.token.password
     repository                                = "oci://public.ecr.aws/karpenter"
     namespace = "kube-system"
     #create_role            = true
-    #role_name              = "${module.eks.cluster_name}-karpenter-irsa"
+    #role_name              = "${module.eks.cluster_name}-karpenter-blueprint-irsa"
     role_name_use_prefix   = false
   }
 
@@ -245,6 +249,57 @@ module "ebs_csi_driver_irsa" {
 
   tags = local.tags
 }
+
+
+# module "karpenter_pod_identity" {
+#   source = "terraform-aws-modules/eks-pod-identity/aws"
+#   version = "~> 1.4.0"
+
+#   name = "karpenter"
+
+#   additional_policy_arns = {
+#     // "PrometheusQueryAccess" = "arn:aws:iam::aws:policy/AmazonPrometheusQueryAccess"
+#     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+#     CloudWatchAgentServerPolicy = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+#   }
+
+#   # Pod Identity Associations
+#   associations = {
+#     addon = {
+#       cluster_name = module.eks.cluster_name
+#       namespace       = "kube-system"
+#       service_account = "karpenter"
+#     }
+#   }
+
+#   tags = local.tags
+# }
+
+################################################################################
+# Karpenter EKS Access
+################################################################################
+
+# module "karpenter" {
+#   source  = "terraform-aws-modules/eks/aws//modules/karpenter"
+#   version = "~> 20.23.0"
+
+#   cluster_name = module.eks.cluster_name
+
+#   enable_pod_identity             = true
+#   create_pod_identity_association = true
+
+#   namespace = "kube-system"
+#   service_account = "karpenter"
+
+#   # Used to attach additional IAM policies to the Karpenter node IAM role
+#   # Adding IAM policy needed for fluentbit
+#   node_iam_role_additional_policies = {
+#     AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+#     CloudWatchAgentServerPolicy = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+#   }
+
+#   tags = local.tags
+# }
 
 module "aws-auth" {
   source  = "terraform-aws-modules/eks/aws//modules/aws-auth"
